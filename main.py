@@ -1,92 +1,132 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import json
 from datetime import datetime
 from config import Config
 from database import Database, JSONEncoder
 from ai_handler import AIHandler
 
-# Conversation states
-SELECT_SUBJECT, SELECT_COUNT, ANSWERING, UPLOAD_QUESTIONS = range(4)
-
-class NEETQuizBot:
+class NEETBiologyBot:
     def __init__(self):
         self.config = Config()
         self.db = Database(self.config.MONGODB_URI)
         self.ai = AIHandler(self.config.OPENAI_API_KEY)
         self.user_quiz_data = {}
+        self.group_quiz_data = {}
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
+        chat_type = update.effective_chat.type
         self.db.add_user(user.id, user.username, user.first_name, user.last_name or "")
         
         keyboard = [
-            [InlineKeyboardButton("📝 Start Quiz", callback_data='start_quiz')],
-            [InlineKeyboardButton("📚 Choose Subject", callback_data='choose_subject')],
+            [InlineKeyboardButton("📝 Start Biology Quiz", callback_data='start_quiz')],
+            [InlineKeyboardButton("📚 Choose Chapter", callback_data='choose_chapter')],
+            [InlineKeyboardButton("🏷️ Custom Topics", callback_data='choose_topic')],
             [InlineKeyboardButton("📊 My Statistics", callback_data='my_stats')],
             [InlineKeyboardButton("🤖 AI Analysis", callback_data='ai_analysis')],
-            [InlineKeyboardButton("📤 Upload Questions", callback_data='upload_instructions')],
             [InlineKeyboardButton("❓ Help", callback_data='help')]
         ]
+        
+        if user.id == self.config.ADMIN_USER_ID:
+            keyboard.append([InlineKeyboardButton("📤 Upload Questions", callback_data='upload_instructions')])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         welcome_message = (
-            f"👋 Welcome {user.first_name} to NEET Quiz Bot!\n\n"
-            f"🏥 *Your Personal NEET Preparation Assistant*\n\n"
+            f"👋 Welcome {user.first_name} to NEET Biology Bot!\n\n"
+            f"🧬 *Your Ultimate Biology Preparation Assistant*\n\n"
             f"*Features:*\n"
-            f"✅ Customized quizzes by subject\n"
+            f"✅ Biology quizzes by chapter\n"
+            f"✅ Custom topic quizzes\n"
+            f"✅ Dynamic difficulty (Easy → Medium → Hard)\n"
             f"✅ AI-powered explanations\n"
-            f"✅ Progress tracking\n"
-            f"✅ Performance analysis\n\n"
+            f"✅ Works in groups & private chat\n"
+            f"✅ Performance tracking\n\n"
             f"*How to use:*\n"
-            f"1️⃣ Click 'Start Quiz' for random questions\n"
-            f"2️⃣ Choose specific subjects for targeted practice\n"
-            f"3️⃣ Upload your own questions using JSON format\n"
+            f"1️⃣ Click 'Start Quiz' for mixed questions\n"
+            f"2️⃣ Choose specific chapters or topics\n"
+            f"3️⃣ Answer questions to increase difficulty\n"
             f"4️⃣ Get AI insights on your performance\n\n"
-            f"Ready to begin? Choose an option below! 📚"
+            f"Ready to begin? Choose an option! 📚"
         )
         
-        await update.message.reply_text(
-            welcome_message,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+        if chat_type == 'private':
+            await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
+        user_id = query.from_user.id
         
         if query.data == 'start_quiz':
             keyboard = [
-                [InlineKeyboardButton("Physics", callback_data='subject_Physics')],
-                [InlineKeyboardButton("Chemistry", callback_data='subject_Chemistry')],
-                [InlineKeyboardButton("Biology", callback_data='subject_Biology')],
-                [InlineKeyboardButton("Mixed (All Subjects)", callback_data='subject_All')]
+                [InlineKeyboardButton("🎲 Random (Any Chapter)", callback_data='chapter_Mixed')],
+                [InlineKeyboardButton("📚 Choose Chapter", callback_data='choose_chapter')],
+                [InlineKeyboardButton("🏷️ Choose Topic", callback_data='choose_topic')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
-                "📚 *Choose Subject for Quiz:*",
+                "🧬 *Start Biology Quiz*\n\nChoose your quiz mode:",
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
         
-        elif query.data == 'choose_subject':
-            keyboard = [
-                [InlineKeyboardButton("Physics", callback_data='subject_Physics')],
-                [InlineKeyboardButton("Chemistry", callback_data='subject_Chemistry')],
-                [InlineKeyboardButton("Biology", callback_data='subject_Biology')],
-                [InlineKeyboardButton("Mixed (All Subjects)", callback_data='subject_All')]
-            ]
+        elif query.data == 'choose_chapter':
+            chapters = self.db.get_chapters()
+            if not chapters:
+                keyboard = [[InlineKeyboardButton("📤 Upload Questions", callback_data='upload_instructions')]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(
+                    "❌ No questions available!\n\nAdmin needs to upload questions first.",
+                    reply_markup=reply_markup
+                )
+                return
+            
+            keyboard = []
+            for chapter in list(chapters.keys())[:10]:
+                keyboard.append([InlineKeyboardButton(f"📖 {chapter}", callback_data=f'chapter_{chapter}')])
+            
+            keyboard.append([InlineKeyboardButton("🎲 Mixed (All Chapters)", callback_data='chapter_Mixed')])
+            keyboard.append([InlineKeyboardButton("🔙 Back", callback_data='back_to_menu')])
+            
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
-                "📚 *Choose Subject for Quiz:*",
+                "📚 *Choose Biology Chapter:*",
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
         
-        elif query.data.startswith('subject_'):
-            subject = query.data.replace('subject_', '')
-            await self.start_quiz(update, context, subject)
+        elif query.data == 'choose_topic':
+            topics = self.db.get_topics()
+            if not topics:
+                await query.edit_message_text(
+                    "❌ No custom topics available!\n\nAdmin can upload questions with custom topics."
+                )
+                return
+            
+            keyboard = []
+            for topic in list(topics.keys())[:10]:
+                keyboard.append([InlineKeyboardButton(f"🏷️ {topic}", callback_data=f'topic_{topic}')])
+            
+            keyboard.append([InlineKeyboardButton("🔙 Back", callback_data='back_to_menu')])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                "🏷️ *Choose Custom Topic:*",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        
+        elif query.data.startswith('chapter_'):
+            chapter = query.data.replace('chapter_', '')
+            await self.start_quiz(update, context, chapter=chapter)
+        
+        elif query.data.startswith('topic_'):
+            topic = query.data.replace('topic_', '')
+            await self.start_quiz(update, context, topic=topic)
         
         elif query.data == 'my_stats':
             await self.show_stats(update, context)
@@ -100,35 +140,54 @@ class NEETQuizBot:
         elif query.data == 'help':
             await self.show_help(update, context)
         
+        elif query.data == 'back_to_menu':
+            await self.back_to_menu(update, context)
+        
         elif query.data.startswith('answer_'):
             await self.check_answer(update, context)
         
         elif query.data == 'next_question':
             await self.send_question(update, context)
+        
+        elif query.data == 'finish_quiz':
+            await self.finish_quiz(update, context)
     
-    async def start_quiz(self, update, context, subject):
+    async def start_quiz(self, update, context, chapter=None, topic=None):
         query = update.callback_query
         user_id = query.from_user.id
+        chat_id = query.message.chat_id
+        chat_type = query.message.chat.type
         
-        questions = self.db.get_random_questions(count=5, subject=subject)
+        user_data = self.db.get_user_stats(user_id)
+        difficulty = user_data.get('current_difficulty', 'Easy') if user_data else 'Easy'
+        
+        questions = self.db.get_random_questions(count=5, chapter=chapter, topic=topic, difficulty=difficulty)
+        
+        if not questions:
+            # Fallback to any difficulty if no questions for current level
+            questions = self.db.get_random_questions(count=5, chapter=chapter, topic=topic)
         
         if not questions:
             keyboard = [[InlineKeyboardButton("📤 Upload Questions", callback_data='upload_instructions')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
-                f"❌ No questions available for {subject}!\n\n"
-                f"Please upload questions first or try another subject.",
+                "❌ No questions available!\n\nAdmin needs to upload questions first.",
                 reply_markup=reply_markup
             )
             return
         
-        self.user_quiz_data[user_id] = {
+        quiz_key = f"{chat_id}_{user_id}"
+        self.user_quiz_data[quiz_key] = {
             'questions': questions,
             'current_index': 0,
             'score': 0,
             'answers': [],
-            'subject': subject,
-            'start_time': datetime.now()
+            'chapter': chapter or 'Mixed',
+            'topic': topic or 'Mixed',
+            'difficulty': difficulty,
+            'start_time': datetime.now(),
+            'chat_type': chat_type,
+            'chat_id': chat_id
         }
         
         await self.send_question(update, context)
@@ -136,12 +195,14 @@ class NEETQuizBot:
     async def send_question(self, update, context):
         query = update.callback_query
         user_id = query.from_user.id
+        chat_id = query.message.chat_id
+        quiz_key = f"{chat_id}_{user_id}"
         
-        if user_id not in self.user_quiz_data:
+        if quiz_key not in self.user_quiz_data:
             await query.edit_message_text("No active quiz. Start a new quiz!")
             return
         
-        quiz_data = self.user_quiz_data[user_id]
+        quiz_data = self.user_quiz_data[quiz_key]
         current_index = quiz_data['current_index']
         
         if current_index >= len(quiz_data['questions']):
@@ -160,10 +221,15 @@ class NEETQuizBot:
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        chapter_text = current_q.get('chapter', 'N/A')
+        topic_text = current_q.get('topic', 'N/A')
+        difficulty_text = current_q.get('difficulty', quiz_data['difficulty'])
+        
         message = (
-            f"*Question {current_index + 1}/{len(quiz_data['questions'])}*\n"
-            f"*Subject:* {current_q.get('subject', 'N/A')}\n"
-            f"*Chapter:* {current_q.get('chapter', 'N/A')}\n\n"
+            f"🧬 *NEET Biology Quiz*\n"
+            f"*Question {current_index + 1}/{len(quiz_data['questions'])}*\n\n"
+            f"*Chapter:* {chapter_text}\n"
+            f"*Difficulty:* {difficulty_text}\n\n"
             f"{current_q['question']}\n\n"
             f"{options_text}"
         )
@@ -179,13 +245,15 @@ class NEETQuizBot:
         await query.answer()
         
         user_id = query.from_user.id
+        chat_id = query.message.chat_id
+        quiz_key = f"{chat_id}_{user_id}"
         selected_answer = query.data.replace('answer_', '')
         
-        if user_id not in self.user_quiz_data:
+        if quiz_key not in self.user_quiz_data:
             await query.edit_message_text("No active quiz. Start a new quiz!")
             return
         
-        quiz_data = self.user_quiz_data[user_id]
+        quiz_data = self.user_quiz_data[quiz_key]
         current_q = quiz_data['questions'][quiz_data['current_index']]
         correct_answer = current_q['correct_answer']
         
@@ -197,16 +265,18 @@ class NEETQuizBot:
         else:
             response = f"❌ *Wrong!* Correct answer: {correct_answer}"
         
-        # Get AI explanation
         explanation = self.ai.generate_explanation(
             current_q['question'],
             current_q['correct_answer'],
-            current_q['options']
+            current_q['options'],
+            current_q.get('chapter', None)
         )
         
         quiz_data['answers'].append({
             'question': current_q['question'],
-            'subject': current_q.get('subject', 'Unknown'),
+            'chapter': current_q.get('chapter', 'Unknown'),
+            'topic': current_q.get('topic', 'General'),
+            'difficulty': current_q.get('difficulty', quiz_data['difficulty']),
             'selected': selected_answer,
             'correct_answer': correct_answer,
             'correct': is_correct
@@ -240,44 +310,55 @@ class NEETQuizBot:
     async def finish_quiz(self, update, context):
         query = update.callback_query
         user_id = query.from_user.id
+        chat_id = query.message.chat_id
+        quiz_key = f"{chat_id}_{user_id}"
         
-        if user_id not in self.user_quiz_data:
+        if quiz_key not in self.user_quiz_data:
             await query.edit_message_text("No active quiz. Start a new quiz!")
             return
         
-        quiz_data = self.user_quiz_data[user_id]
+        quiz_data = self.user_quiz_data[quiz_key]
         total_questions = len(quiz_data['questions'])
         score = quiz_data['score']
         percentage = (score / total_questions * 100) if total_questions > 0 else 0
         
-        time_taken = (datetime.now() - quiz_data['start_time']).total_seconds() / 60
-        
-        self.db.save_quiz_result(user_id, {
-            'score': score,
-            'total_questions': total_questions,
-            'percentage': percentage,
-            'subject': quiz_data['subject'],
-            'time_taken': time_taken,
-            'answers': quiz_data['answers']
-        })
+        self.db.save_quiz_result(
+            user_id,
+            {
+                'score': score,
+                'total_questions': total_questions,
+                'percentage': percentage,
+                'chapter': quiz_data['chapter'],
+                'topic': quiz_data['topic'],
+                'difficulty': quiz_data['difficulty'],
+                'answers': quiz_data['answers']
+            },
+            chat_type=quiz_data['chat_type'],
+            group_id=chat_id if quiz_data['chat_type'] != 'private' else None
+        )
         
         if percentage >= 80:
             emoji = "🌟"
-            comment = "Excellent! You're NEET ready!"
+            comment = "Excellent! Moving to harder questions!"
+            next_difficulty = "Hard"
         elif percentage >= 60:
             emoji = "👍"
-            comment = "Good job! Keep practicing!"
+            comment = "Good job! Difficulty increasing!"
+            next_difficulty = "Medium"
         else:
             emoji = "📚"
-            comment = "Keep practicing! You'll improve!"
+            comment = "Keep practicing! Stay at this level."
+            next_difficulty = "Easy"
         
         message = (
             f"🎉 *Quiz Completed!*\n\n"
-            f"*Subject:* {quiz_data['subject']}\n"
+            f"*Chapter:* {quiz_data['chapter']}\n"
+            f"*Topic:* {quiz_data['topic']}\n"
+            f"*Difficulty:* {quiz_data['difficulty']}\n"
             f"*Score:* {score}/{total_questions}\n"
-            f"*Percentage:* {percentage:.1f}%\n"
-            f"*Time Taken:* {time_taken:.1f} minutes\n\n"
-            f"{emoji} {comment}"
+            f"*Percentage:* {percentage:.1f}%\n\n"
+            f"{emoji} {comment}\n"
+            f"*Next Level:* {next_difficulty}"
         )
         
         keyboard = [
@@ -293,38 +374,42 @@ class NEETQuizBot:
             parse_mode='Markdown'
         )
         
-        del self.user_quiz_data[user_id]
+        del self.user_quiz_data[quiz_key]
     
     async def show_stats(self, update, context):
         query = update.callback_query
         user_id = query.from_user.id
         
         user_data = self.db.get_user_stats(user_id)
-        recent_results = self.db.get_recent_results(user_id, 5)
         
-        if not user_data:
+        if not user_data or user_data['total_quizzes_taken'] == 0:
             await query.edit_message_text("No statistics available. Take a quiz first!")
             return
         
         message = (
-            f"📊 *Your Statistics*\n\n"
+            f"📊 *Your Biology Statistics*\n\n"
             f"*Total Quizzes:* {user_data['total_quizzes_taken']}\n"
             f"*Total Questions:* {user_data['total_questions_answered']}\n"
             f"*Correct Answers:* {user_data['correct_answers']}\n"
-            f"*Average Score:* {user_data['average_score']:.1f}%\n\n"
-            f"*Subject Performance:*\n"
+            f"*Average Score:* {user_data['average_score']:.1f}%\n"
+            f"*Current Difficulty:* {user_data['current_difficulty']}\n\n"
+            f"*Difficulty Progress:*\n"
         )
         
-        for subject, stats in user_data['subject_stats'].items():
+        for level in ['Easy', 'Medium', 'Hard']:
+            stats = user_data['difficulty_progress'].get(level, {'attempted': 0, 'correct': 0})
             attempted = stats['attempted']
             correct = stats['correct']
             accuracy = (correct / attempted * 100) if attempted > 0 else 0
-            message += f"• {subject}: {accuracy:.1f}% ({correct}/{attempted})\n"
+            message += f"• {level}: {accuracy:.1f}% ({correct}/{attempted})\n"
         
-        if recent_results:
-            message += f"\n*Recent Results:*\n"
-            for result in recent_results:
-                message += f"• {result['percentage']:.1f}% - {result['subject']} ({result['timestamp'].strftime('%d/%m/%Y')})\n"
+        if user_data['chapter_stats']:
+            message += f"\n*Chapter Performance:*\n"
+            for chapter, stats in list(user_data['chapter_stats'].items())[:5]:
+                attempted = stats['attempted']
+                correct = stats['correct']
+                accuracy = (correct / attempted * 100) if attempted > 0 else 0
+                message += f"• {chapter}: {accuracy:.1f}%\n"
         
         keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='back_to_menu')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -342,18 +427,18 @@ class NEETQuizBot:
             await query.edit_message_text("No quiz history available for AI analysis. Take a quiz first!")
             return
         
-        await query.edit_message_text("🤖 *Analyzing your performance...*", parse_mode='Markdown')
+        await query.edit_message_text("🤖 *Analyzing your Biology performance...*", parse_mode='Markdown')
         
         analysis = self.ai.analyze_performance(
             json.loads(json.dumps(user_history, cls=JSONEncoder)),
-            user_data['subject_stats'] if user_data else {}
+            json.loads(json.dumps(user_data, cls=JSONEncoder)) if user_data else {}
         )
         
         keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='back_to_menu')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            f"🤖 *AI Performance Analysis*\n\n{analysis}",
+            f"🤖 *AI Biology Performance Analysis*\n\n{analysis}",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -364,44 +449,43 @@ class NEETQuizBot:
         
         if user_id != self.config.ADMIN_USER_ID:
             await query.edit_message_text(
-                "⚠️ *Admin Only Feature*\n\n"
-                "Only the bot admin can upload questions.",
+                "⚠️ *Admin Only Feature*\n\nOnly the bot admin can upload questions.",
                 parse_mode='Markdown'
             )
             return
         
-        format_example = {
-            "questions": [
-                {
-                    "question": "Which of the following is the powerhouse of the cell?",
-                    "options": {
-                        "A": "Nucleus",
-                        "B": "Mitochondria",
-                        "C": "Ribosome",
-                        "D": "Golgi apparatus"
-                    },
-                    "correct_answer": "B",
-                    "subject": "Biology",
-                    "chapter": "Cell Biology",
-                    "difficulty": "Easy"
-                }
-            ]
-        }
-        
         message = (
             "📋 *Question Upload Format*\n\n"
-            "Send questions in JSON format using /upload command\n\n"
-            "*Example Format:*\n"
+            "Send questions using /upload command\n\n"
+            "*Format:*\n"
             "```json\n"
-            f"{json.dumps(format_example, indent=2)}\n"
+            "{\n"
+            '  "questions": [\n'
+            "    {\n"
+            '      "question": "Which organelle is the powerhouse of the cell?",\n'
+            '      "options": {\n'
+            '        "A": "Nucleus",\n'
+            '        "B": "Mitochondria",\n'
+            '        "C": "Ribosome",\n'
+            '        "D": "Golgi apparatus"\n'
+            "      },\n"
+            '      "correct_answer": "B",\n'
+            '      "subject": "Biology",\n'
+            '      "chapter": "Cell Biology",\n'
+            '      "difficulty": "Easy",\n'
+            '      "topic": "Cell Organelles"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
             "```\n\n"
             "*Rules:*\n"
-            "• Must have exactly 4 options (A, B, C, D)\n"
-            "• Correct answer must be A, B, C, or D\n"
-            "• Subject: Physics, Chemistry, or Biology\n"
-            "• Difficulty: Easy, Medium, or Hard\n\n"
-            "*To upload:*\n"
-            "Type /upload followed by JSON"
+            "• 4 options (A, B, C, D)\n"
+            "• Correct answer: A, B, C, or D\n"
+            "• Difficulty: Easy, Medium, Hard\n"
+            "• Topic: Custom topic name (optional)\n\n"
+            "*Commands:*\n"
+            "/upload - Upload questions\n"
+            "/format - See format"
         )
         
         keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='back_to_menu')]]
@@ -416,19 +500,23 @@ class NEETQuizBot:
             "❓ *Help & Instructions*\n\n"
             "*Commands:*\n"
             "/start - Start the bot\n"
-            "/upload - Upload questions (Admin only)\n"
-            "/format - Show question format\n"
-            "/stats - View your statistics\n"
-            "/cancel - Cancel current operation\n\n"
+            "/upload - Upload questions (Admin)\n"
+            "/format - Question format\n"
+            "/stats - Your statistics\n"
+            "/cancel - Cancel operation\n\n"
             "*Features:*\n"
-            "• Subject-wise quizzes\n"
+            "• Chapter-wise Biology quizzes\n"
+            "• Custom topic quizzes\n"
+            "• Dynamic difficulty levels\n"
             "• AI explanations\n"
             "• Performance tracking\n"
             "• AI analysis\n\n"
-            "*Subjects:*\n"
-            "• Physics\n"
-            "• Chemistry\n"
-            "• Biology"
+            "*Works in:*\n"
+            "• Private chat\n"
+            "• Groups (add bot as admin)\n\n"
+            "*Difficulty Progression:*\n"
+            "Easy → Medium → Hard\n"
+            "Based on your quiz performance"
         )
         
         keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='back_to_menu')]]
@@ -440,18 +528,24 @@ class NEETQuizBot:
         query = update.callback_query
         await query.answer()
         
+        user_id = query.from_user.id
+        
         keyboard = [
-            [InlineKeyboardButton("📝 Start Quiz", callback_data='start_quiz')],
-            [InlineKeyboardButton("📚 Choose Subject", callback_data='choose_subject')],
+            [InlineKeyboardButton("📝 Start Biology Quiz", callback_data='start_quiz')],
+            [InlineKeyboardButton("📚 Choose Chapter", callback_data='choose_chapter')],
+            [InlineKeyboardButton("🏷️ Custom Topics", callback_data='choose_topic')],
             [InlineKeyboardButton("📊 My Statistics", callback_data='my_stats')],
             [InlineKeyboardButton("🤖 AI Analysis", callback_data='ai_analysis')],
-            [InlineKeyboardButton("📤 Upload Questions", callback_data='upload_instructions')],
             [InlineKeyboardButton("❓ Help", callback_data='help')]
         ]
+        
+        if user_id == self.config.ADMIN_USER_ID:
+            keyboard.append([InlineKeyboardButton("📤 Upload Questions", callback_data='upload_instructions')])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "🏥 *NEET Quiz Bot Main Menu*\n\nChoose an option:",
+            "🧬 *NEET Biology Bot Main Menu*\n\nChoose an option:",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -461,8 +555,7 @@ class NEETQuizBot:
         
         if user_id != self.config.ADMIN_USER_ID:
             await update.message.reply_text(
-                "⚠️ *Admin Only Feature*\n\n"
-                "Only the bot admin can upload questions.",
+                "⚠️ *Admin Only Feature*\n\nOnly the bot admin can upload questions.",
                 parse_mode='Markdown'
             )
             return
@@ -473,7 +566,7 @@ class NEETQuizBot:
                 "Send JSON after /upload command\n"
                 "Example:\n"
                 "/upload {\"questions\": [...]}\n\n"
-                "Use /format to see the exact format",
+                "Use /format to see exact format",
                 parse_mode='Markdown'
             )
             return
@@ -487,11 +580,15 @@ class NEETQuizBot:
             else:
                 questions = [question_data]
             
+            topic_name = question_data.get('topic_name', None)
+            
             valid_questions = []
             errors = []
             
             for q in questions:
-                required = ['question', 'options', 'correct_answer', 'subject', 'chapter', 'difficulty']
+                q['subject'] = 'Biology'
+                
+                required = ['question', 'options', 'correct_answer', 'chapter', 'difficulty']
                 missing = [field for field in required if field not in q]
                 
                 if missing:
@@ -499,96 +596,4 @@ class NEETQuizBot:
                     continue
                 
                 if len(q['options']) != 4:
-                    errors.append("Each question must have exactly 4 options")
-                    continue
-                
-                if q['correct_answer'] not in ['A', 'B', 'C', 'D']:
-                    errors.append("Correct answer must be A, B, C, or D")
-                    continue
-                
-                valid_questions.append(q)
-            
-            if valid_questions:
-                added = self.db.add_questions(valid_questions, user_id)
-                await update.message.reply_text(
-                    f"✅ Successfully uploaded {added} questions!",
-                    parse_mode='Markdown'
-                )
-            
-            if errors:
-                await update.message.reply_text(
-                    f"⚠️ {len(errors)} questions failed:\n" + "\n".join(errors[:5]),
-                    parse_mode='Markdown'
-                )
-        
-        except json.JSONDecodeError:
-            await update.message.reply_text(
-                "❌ Invalid JSON format!\n"
-                "Use /format to see the correct format",
-                parse_mode='Markdown'
-            )
-    
-    async def format_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        format_example = {
-            "questions": [
-                {
-                    "question": "Which of the following is the powerhouse of the cell?",
-                    "options": {
-                        "A": "Nucleus",
-                        "B": "Mitochondria",
-                        "C": "Ribosome",
-                        "D": "Golgi apparatus"
-                    },
-                    "correct_answer": "B",
-                    "subject": "Biology",
-                    "chapter": "Cell Biology",
-                    "difficulty": "Easy"
-                }
-            ]
-        }
-        
-        await update.message.reply_text(
-            "📋 *Question Format*\n\n"
-            "```json\n"
-            f"{json.dumps(format_example, indent=2)}\n"
-            "```",
-            parse_mode='Markdown'
-        )
-    
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        user_data = self.db.get_user_stats(user_id)
-        
-        if not user_data:
-            await update.message.reply_text("No statistics available. Take a quiz first!")
-            return
-        
-        message = (
-            f"📊 *Your Statistics*\n\n"
-            f"Total Quizzes: {user_data['total_quizzes_taken']}\n"
-            f"Total Questions: {user_data['total_questions_answered']}\n"
-            f"Average Score: {user_data['average_score']:.1f}%"
-        )
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
-    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("Operation cancelled. Use /start to begin again.")
-
-def main():
-    config = Config()
-    bot = NEETQuizBot()
-    
-    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
-    
-    application.add_handler(CommandHandler("start", bot.start))
-    application.add_handler(CommandHandler("upload", bot.upload_command))
-    application.add_handler(CommandHandler("format", bot.format_command))
-    application.add_handler(CommandHandler("stats", bot.stats_command))
-    application.add_handler(CommandHandler("cancel", bot.cancel))
-    application.add_handler(CallbackQueryHandler(bot.button_handler))
-    
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
+                    errors.append("Each question must have exactly 4 options
