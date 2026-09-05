@@ -4,6 +4,7 @@ import json
 class AIHandler:
     def __init__(self, api_key):
         openai.api_key = api_key
+        self.user_performance = {}
     
     def generate_explanation(self, question, correct_answer, options, chapter=None):
         try:
@@ -36,7 +37,7 @@ class AIHandler:
             
             return response.choices[0].message.content
         except Exception as e:
-            return f"Explanation: {correct_answer} is the correct answer."
+            return f"{correct_answer} is the correct answer."
     
     def analyze_performance(self, user_history, user_stats):
         try:
