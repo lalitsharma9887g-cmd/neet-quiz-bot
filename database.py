@@ -1,33 +1,50 @@
-from pymongo import MongoClient
-from datetime import datetime
 import json
-from bson import ObjectId
+import os
+import random
+from datetime import datetime
 
 class JSONEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, ObjectId):
-            return str(obj)
         if isinstance(obj, datetime):
             return obj.isoformat()
         return super().default(obj)
 
 class Database:
-    def __init__(self, uri):
-        self.client = MongoClient(uri, tls=True, tlsAllowInvalidCertificates=True)
-        self.db = self.client['neet_quiz_bot']
-        self.users = self.db['users']
-        self.questions = self.db['questions']
-        self.quiz_results = self.db['quiz_results']
-        self.custom_topics = self.db['custom_topics']
+    def __init__(self, uri=None):
+        self.data_file = 'bot_data.json'
+        self.load_data()
+    
+    def load_data(self):
+        if os.path.exists(self.data_file):
+            with open(self.data_file, 'r') as f:
+                data = json.load(f)
+                self.users = data.get('users', {})
+                self.questions = data.get('questions', [])
+                self.quiz_results = data.get('quiz_results', [])
+        else:
+            self.users = {}
+            self.questions = []
+            self.quiz_results = []
+            self.save_data()
+    
+    def save_data(self):
+        data = {
+            'users': self.users,
+            'questions': self.questions,
+            'quiz_results': self.quiz_results
+        }
+        with open(self.data_file, 'w') as f:
+            json.dump(data, f, cls=JSONEncoder, indent=2)
     
     def add_user(self, user_id, username, first_name, last_name=""):
-        if not self.users.find_one({'user_id': user_id}):
-            self.users.insert_one({
+        user_id = str(user_id)
+        if user_id not in self.users:
+            self.users[user_id] = {
                 'user_id': user_id,
                 'username': username,
                 'first_name': first_name,
                 'last_name': last_name,
-                'joined_date': datetime.now(),
+                'joined_date': datetime.now().isoformat(),
                 'total_quizzes_taken': 0,
                 'total_questions_answered': 0,
                 'correct_answers': 0,
@@ -39,68 +56,65 @@ class Database:
                     'Hard': {'attempted': 0, 'correct': 0}
                 },
                 'chapter_stats': {},
-                'topic_stats': {},
-                'last_activity': datetime.now()
-            })
-        else:
-            self.users.update_one(
-                {'user_id': user_id},
-                {'$set': {'last_activity': datetime.now()}}
-            )
+                'topic_stats': {}
+            }
+            self.save_data()
     
     def add_questions(self, questions_list, uploaded_by, topic_name=None):
         added_count = 0
         for question in questions_list:
             question['uploaded_by'] = uploaded_by
-            question['uploaded_at'] = datetime.now()
+            question['uploaded_at'] = datetime.now().isoformat()
             question['times_used'] = 0
             question['times_answered_correctly'] = 0
             if topic_name:
                 question['topic'] = topic_name
-            self.questions.insert_one(question)
+            self.questions.append(question)
             added_count += 1
+        self.save_data()
         return added_count
     
     def get_random_questions(self, count=5, chapter=None, topic=None, difficulty=None):
-        query = {'subject': 'Biology'}
+        filtered = []
+        for q in self.questions:
+            if q.get('subject') != 'Biology':
+                continue
+            if chapter and chapter != "Mixed" and q.get('chapter') != chapter:
+                continue
+            if topic and topic != "Mixed" and q.get('topic') != topic:
+                continue
+            if difficulty and difficulty != "Mixed" and q.get('difficulty') != difficulty:
+                continue
+            filtered.append(q)
         
-        if chapter and chapter != "Mixed":
-            query['chapter'] = chapter
-        if topic and topic != "Mixed":
-            query['topic'] = topic
-        if difficulty and difficulty != "Mixed":
-            query['difficulty'] = difficulty
+        if len(filtered) <= count:
+            return filtered
         
-        pipeline = [
-            {'$match': query},
-            {'$sample': {'size': count}}
-        ]
-        
-        questions = list(self.questions.aggregate(pipeline))
-        return questions
+        return random.sample(filtered, count)
     
     def get_chapters(self):
-        pipeline = [
-            {'$match': {'subject': 'Biology'}},
-            {'$group': {'_id': '$chapter', 'count': {'$sum': 1}}}
-        ]
-        results = list(self.questions.aggregate(pipeline))
-        return {r['_id']: r['count'] for r in results if r['_id']}
+        chapters = {}
+        for q in self.questions:
+            if q.get('subject') == 'Biology' and q.get('chapter'):
+                chapter = q['chapter']
+                chapters[chapter] = chapters.get(chapter, 0) + 1
+        return chapters
     
     def get_topics(self):
-        pipeline = [
-            {'$match': {'subject': 'Biology', 'topic': {'$exists': True}}},
-            {'$group': {'_id': '$topic', 'count': {'$sum': 1}}}
-        ]
-        results = list(self.questions.aggregate(pipeline))
-        return {r['_id']: r['count'] for r in results if r['_id']}
+        topics = {}
+        for q in self.questions:
+            if q.get('subject') == 'Biology' and q.get('topic'):
+                topic = q['topic']
+                topics[topic] = topics.get(topic, 0) + 1
+        return topics
     
     def save_quiz_result(self, user_id, quiz_data, chat_type='private', group_id=None):
+        user_id = str(user_id)
         result = {
             'user_id': user_id,
             'chat_type': chat_type,
             'group_id': group_id,
-            'timestamp': datetime.now(),
+            'timestamp': datetime.now().isoformat(),
             'score': quiz_data['score'],
             'total_questions': quiz_data['total_questions'],
             'percentage': quiz_data['percentage'],
@@ -109,58 +123,59 @@ class Database:
             'difficulty': quiz_data.get('difficulty', 'Mixed'),
             'answers': quiz_data['answers']
         }
-        self.quiz_results.insert_one(result)
+        self.quiz_results.append(result)
         
-        user = self.users.find_one({'user_id': user_id})
-        if user:
-            total_quizzes = user['total_quizzes_taken'] + 1
-            total_questions = user['total_questions_answered'] + quiz_data['total_questions']
-            correct_answers = user['correct_answers'] + quiz_data['score']
-            average_score = (correct_answers / total_questions * 100) if total_questions > 0 else 0
+        if user_id in self.users:
+            user = self.users[user_id]
+            user['total_quizzes_taken'] += 1
+            user['total_questions_answered'] += quiz_data['total_questions']
+            user['correct_answers'] += quiz_data['score']
             
-            update_data = {
-                'total_quizzes_taken': total_quizzes,
-                'total_questions_answered': total_questions,
-                'correct_answers': correct_answers,
-                'average_score': average_score,
-                'last_activity': datetime.now()
-            }
+            total_q = user['total_questions_answered']
+            correct = user['correct_answers']
+            user['average_score'] = (correct / total_q * 100) if total_q > 0 else 0
             
             for answer in quiz_data['answers']:
                 difficulty = answer.get('difficulty', 'Easy')
                 if difficulty in user['difficulty_progress']:
-                    update_data[f'difficulty_progress.{difficulty}.attempted'] = user['difficulty_progress'][difficulty]['attempted'] + 1
+                    user['difficulty_progress'][difficulty]['attempted'] += 1
                     if answer['correct']:
-                        update_data[f'difficulty_progress.{difficulty}.correct'] = user['difficulty_progress'][difficulty]['correct'] + 1
+                        user['difficulty_progress'][difficulty]['correct'] += 1
                 
                 chapter = answer.get('chapter', 'Unknown')
                 if chapter not in user['chapter_stats']:
                     user['chapter_stats'][chapter] = {'attempted': 0, 'correct': 0}
-                update_data[f'chapter_stats.{chapter}.attempted'] = user['chapter_stats'][chapter]['attempted'] + 1
+                user['chapter_stats'][chapter]['attempted'] += 1
                 if answer['correct']:
-                    update_data[f'chapter_stats.{chapter}.correct'] = user['chapter_stats'][chapter]['correct'] + 1
+                    user['chapter_stats'][chapter]['correct'] += 1
                 
                 topic = answer.get('topic', 'General')
                 if topic not in user['topic_stats']:
                     user['topic_stats'][topic] = {'attempted': 0, 'correct': 0}
-                update_data[f'topic_stats.{topic}.attempted'] = user['topic_stats'][topic]['attempted'] + 1
+                user['topic_stats'][topic]['attempted'] += 1
                 if answer['correct']:
-                    update_data[f'topic_stats.{topic}.correct'] = user['topic_stats'][topic]['correct'] + 1
+                    user['topic_stats'][topic]['correct'] += 1
             
             if quiz_data['percentage'] >= 80:
-                update_data['current_difficulty'] = 'Hard'
+                user['current_difficulty'] = 'Hard'
             elif quiz_data['percentage'] >= 60:
-                update_data['current_difficulty'] = 'Medium'
+                user['current_difficulty'] = 'Medium'
             else:
-                update_data['current_difficulty'] = 'Easy'
-            
-            self.users.update_one({'user_id': user_id}, {'$set': update_data})
+                user['current_difficulty'] = 'Easy'
+        
+        self.save_data()
     
     def get_user_stats(self, user_id):
-        return self.users.find_one({'user_id': user_id})
+        return self.users.get(str(user_id))
     
     def get_recent_results(self, user_id, limit=5):
-        return list(self.quiz_results.find({'user_id': user_id}).sort('timestamp', -1).limit(limit))
+        user_id = str(user_id)
+        results = [r for r in self.quiz_results if r['user_id'] == user_id]
+        results.sort(key=lambda x: x['timestamp'], reverse=True)
+        return results[:limit]
     
     def get_all_results(self, user_id, limit=50):
-        return list(self.quiz_results.find({'user_id': user_id}).sort('timestamp', -1).limit(50))
+        user_id = str(user_id)
+        results = [r for r in self.quiz_results if r['user_id'] == user_id]
+        results.sort(key=lambda x: x['timestamp'], reverse=True)
+        return results[:limit]
