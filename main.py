@@ -1,7 +1,8 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import asyncio
 import json
 from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from config import Config
 from database import Database, JSONEncoder
 from ai_handler import AIHandler
@@ -12,7 +13,6 @@ class NEETBiologyBot:
         self.db = Database(self.config.MONGODB_URI)
         self.ai = AIHandler(self.config.OPENAI_API_KEY)
         self.user_quiz_data = {}
-        self.group_quiz_data = {}
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -51,10 +51,7 @@ class NEETBiologyBot:
             f"Ready to begin? Choose an option! 📚"
         )
         
-        if chat_type == 'private':
-            await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text(welcome_message, reply_markup=reply_markup, parse_mode='Markdown')
     
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -77,11 +74,8 @@ class NEETBiologyBot:
         elif query.data == 'choose_chapter':
             chapters = self.db.get_chapters()
             if not chapters:
-                keyboard = [[InlineKeyboardButton("📤 Upload Questions", callback_data='upload_instructions')]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(
-                    "❌ No questions available!\n\nAdmin needs to upload questions first.",
-                    reply_markup=reply_markup
+                    "❌ No questions available!\n\nAdmin needs to upload questions first."
                 )
                 return
             
@@ -164,15 +158,11 @@ class NEETBiologyBot:
         questions = self.db.get_random_questions(count=5, chapter=chapter, topic=topic, difficulty=difficulty)
         
         if not questions:
-            # Fallback to any difficulty if no questions for current level
             questions = self.db.get_random_questions(count=5, chapter=chapter, topic=topic)
         
         if not questions:
-            keyboard = [[InlineKeyboardButton("📤 Upload Questions", callback_data='upload_instructions')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(
-                "❌ No questions available!\n\nAdmin needs to upload questions first.",
-                reply_markup=reply_markup
+                "❌ No questions available!\n\nAdmin needs to upload questions first."
             )
             return
         
@@ -221,15 +211,11 @@ class NEETBiologyBot:
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        chapter_text = current_q.get('chapter', 'N/A')
-        topic_text = current_q.get('topic', 'N/A')
-        difficulty_text = current_q.get('difficulty', quiz_data['difficulty'])
-        
         message = (
             f"🧬 *NEET Biology Quiz*\n"
             f"*Question {current_index + 1}/{len(quiz_data['questions'])}*\n\n"
-            f"*Chapter:* {chapter_text}\n"
-            f"*Difficulty:* {difficulty_text}\n\n"
+            f"*Chapter:* {current_q.get('chapter', 'N/A')}\n"
+            f"*Difficulty:* {current_q.get('difficulty', quiz_data['difficulty'])}\n\n"
             f"{current_q['question']}\n\n"
             f"{options_text}"
         )
@@ -403,14 +389,6 @@ class NEETBiologyBot:
             accuracy = (correct / attempted * 100) if attempted > 0 else 0
             message += f"• {level}: {accuracy:.1f}% ({correct}/{attempted})\n"
         
-        if user_data['chapter_stats']:
-            message += f"\n*Chapter Performance:*\n"
-            for chapter, stats in list(user_data['chapter_stats'].items())[:5]:
-                attempted = stats['attempted']
-                correct = stats['correct']
-                accuracy = (correct / attempted * 100) if attempted > 0 else 0
-                message += f"• {chapter}: {accuracy:.1f}%\n"
-        
         keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='back_to_menu')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -460,29 +438,23 @@ class NEETBiologyBot:
             "*Format:*\n"
             "```json\n"
             "{\n"
+            '  "topic_name": "Cell Organelles",\n'
             '  "questions": [\n'
             "    {\n"
-            '      "question": "Which organelle is the powerhouse of the cell?",\n'
+            '      "question": "Which organelle is the powerhouse?",\n'
             '      "options": {\n'
             '        "A": "Nucleus",\n'
             '        "B": "Mitochondria",\n'
             '        "C": "Ribosome",\n'
-            '        "D": "Golgi apparatus"\n'
+            '        "D": "Golgi"\n'
             "      },\n"
             '      "correct_answer": "B",\n'
-            '      "subject": "Biology",\n'
             '      "chapter": "Cell Biology",\n'
-            '      "difficulty": "Easy",\n'
-            '      "topic": "Cell Organelles"\n'
+            '      "difficulty": "Easy"\n'
             "    }\n"
             "  ]\n"
             "}\n"
             "```\n\n"
-            "*Rules:*\n"
-            "• 4 options (A, B, C, D)\n"
-            "• Correct answer: A, B, C, or D\n"
-            "• Difficulty: Easy, Medium, Hard\n"
-            "• Topic: Custom topic name (optional)\n\n"
             "*Commands:*\n"
             "/upload - Upload questions\n"
             "/format - See format"
@@ -513,10 +485,7 @@ class NEETBiologyBot:
             "• AI analysis\n\n"
             "*Works in:*\n"
             "• Private chat\n"
-            "• Groups (add bot as admin)\n\n"
-            "*Difficulty Progression:*\n"
-            "Easy → Medium → Hard\n"
-            "Based on your quiz performance"
+            "• Groups (add bot as admin)"
         )
         
         keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data='back_to_menu')]]
@@ -680,6 +649,7 @@ class NEETBiologyBot:
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Operation cancelled. Use /start to begin again.")
 
+
 def main():
     config = Config()
     bot = NEETBiologyBot()
@@ -693,7 +663,12 @@ def main():
     application.add_handler(CommandHandler("cancel", bot.cancel))
     application.add_handler(CallbackQueryHandler(bot.button_handler))
     
+    # Fix for Python 3.14
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     application.run_polling()
+
 
 if __name__ == '__main__':
     main()
