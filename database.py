@@ -13,7 +13,7 @@ class JSONEncoder(json.JSONEncoder):
 
 class Database:
     def __init__(self, uri):
-        self.client = MongoClient(uri)
+        self.client = MongoClient(uri, tls=True, tlsAllowInvalidCertificates=True)
         self.db = self.client['neet_quiz_bot']
         self.users = self.db['users']
         self.questions = self.db['questions']
