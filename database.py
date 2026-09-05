@@ -126,7 +126,6 @@ class Database:
                 'last_activity': datetime.now()
             }
             
-            # Update difficulty progress
             for answer in quiz_data['answers']:
                 difficulty = answer.get('difficulty', 'Easy')
                 if difficulty in user['difficulty_progress']:
@@ -134,7 +133,6 @@ class Database:
                     if answer['correct']:
                         update_data[f'difficulty_progress.{difficulty}.correct'] = user['difficulty_progress'][difficulty]['correct'] + 1
                 
-                # Update chapter stats
                 chapter = answer.get('chapter', 'Unknown')
                 if chapter not in user['chapter_stats']:
                     user['chapter_stats'][chapter] = {'attempted': 0, 'correct': 0}
@@ -142,7 +140,6 @@ class Database:
                 if answer['correct']:
                     update_data[f'chapter_stats.{chapter}.correct'] = user['chapter_stats'][chapter]['correct'] + 1
                 
-                # Update topic stats
                 topic = answer.get('topic', 'General')
                 if topic not in user['topic_stats']:
                     user['topic_stats'][topic] = {'attempted': 0, 'correct': 0}
@@ -150,7 +147,6 @@ class Database:
                 if answer['correct']:
                     update_data[f'topic_stats.{topic}.correct'] = user['topic_stats'][topic]['correct'] + 1
             
-            # Update difficulty level based on performance
             if quiz_data['percentage'] >= 80:
                 update_data['current_difficulty'] = 'Hard'
             elif quiz_data['percentage'] >= 60:
@@ -167,4 +163,4 @@ class Database:
         return list(self.quiz_results.find({'user_id': user_id}).sort('timestamp', -1).limit(limit))
     
     def get_all_results(self, user_id, limit=50):
-        return list(self.quiz_results.find({'user_id': user_id}).sort('timestamp', -1).limit(limit))
+        return list(self.quiz_results.find({'user_id': user_id}).sort('timestamp', -1).limit(50))
