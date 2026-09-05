@@ -596,4 +596,104 @@ class NEETBiologyBot:
                     continue
                 
                 if len(q['options']) != 4:
-                    errors.append("Each question must have exactly 4 options
+                    errors.append("Each question must have exactly 4 options")
+                    continue
+                
+                if q['correct_answer'] not in ['A', 'B', 'C', 'D']:
+                    errors.append("Correct answer must be A, B, C, or D")
+                    continue
+                
+                if q['difficulty'] not in ['Easy', 'Medium', 'Hard']:
+                    errors.append("Difficulty must be Easy, Medium, or Hard")
+                    continue
+                
+                if topic_name:
+                    q['topic'] = topic_name
+                
+                valid_questions.append(q)
+            
+            if valid_questions:
+                added = self.db.add_questions(valid_questions, user_id, topic_name)
+                await update.message.reply_text(
+                    f"✅ Successfully uploaded {added} Biology questions!",
+                    parse_mode='Markdown'
+                )
+            
+            if errors:
+                await update.message.reply_text(
+                    f"⚠️ {len(errors)} questions failed:\n" + "\n".join(errors[:5]),
+                    parse_mode='Markdown'
+                )
+        
+        except json.JSONDecodeError:
+            await update.message.reply_text(
+                "❌ Invalid JSON format!\nUse /format to see correct format",
+                parse_mode='Markdown'
+            )
+    
+    async def format_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        format_example = {
+            "topic_name": "Cell Organelles",
+            "questions": [
+                {
+                    "question": "Which organelle is the powerhouse of the cell?",
+                    "options": {
+                        "A": "Nucleus",
+                        "B": "Mitochondria",
+                        "C": "Ribosome",
+                        "D": "Golgi apparatus"
+                    },
+                    "correct_answer": "B",
+                    "chapter": "Cell Biology",
+                    "difficulty": "Easy"
+                }
+            ]
+        }
+        
+        await update.message.reply_text(
+            "📋 *Biology Question Format*\n\n"
+            "```json\n"
+            f"{json.dumps(format_example, indent=2)}\n"
+            "```\n\n"
+            "*Note:* `topic_name` is optional for custom topic grouping",
+            parse_mode='Markdown'
+        )
+    
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        user_data = self.db.get_user_stats(user_id)
+        
+        if not user_data or user_data['total_quizzes_taken'] == 0:
+            await update.message.reply_text("No statistics available. Take a quiz first!")
+            return
+        
+        message = (
+            f"📊 *Your Biology Statistics*\n\n"
+            f"Total Quizzes: {user_data['total_quizzes_taken']}\n"
+            f"Total Questions: {user_data['total_questions_answered']}\n"
+            f"Average Score: {user_data['average_score']:.1f}%\n"
+            f"Current Difficulty: {user_data['current_difficulty']}"
+        )
+        
+        await update.message.reply_text(message, parse_mode='Markdown')
+    
+    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text("Operation cancelled. Use /start to begin again.")
+
+def main():
+    config = Config()
+    bot = NEETBiologyBot()
+    
+    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", bot.start))
+    application.add_handler(CommandHandler("upload", bot.upload_command))
+    application.add_handler(CommandHandler("format", bot.format_command))
+    application.add_handler(CommandHandler("stats", bot.stats_command))
+    application.add_handler(CommandHandler("cancel", bot.cancel))
+    application.add_handler(CallbackQueryHandler(bot.button_handler))
+    
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
