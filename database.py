@@ -18,6 +18,7 @@ class Database:
         self.users = self.db['users']
         self.questions = self.db['questions']
         self.quiz_results = self.db['quiz_results']
+        self.custom_topics = self.db['custom_topics']
     
     def add_user(self, user_id, username, first_name, last_name=""):
         if not self.users.find_one({'user_id': user_id}):
@@ -31,11 +32,14 @@ class Database:
                 'total_questions_answered': 0,
                 'correct_answers': 0,
                 'average_score': 0,
-                'subject_stats': {
-                    'Physics': {'attempted': 0, 'correct': 0},
-                    'Chemistry': {'attempted': 0, 'correct': 0},
-                    'Biology': {'attempted': 0, 'correct': 0}
+                'current_difficulty': 'Easy',
+                'difficulty_progress': {
+                    'Easy': {'attempted': 0, 'correct': 0},
+                    'Medium': {'attempted': 0, 'correct': 0},
+                    'Hard': {'attempted': 0, 'correct': 0}
                 },
+                'chapter_stats': {},
+                'topic_stats': {},
                 'last_activity': datetime.now()
             })
         else:
@@ -44,21 +48,28 @@ class Database:
                 {'$set': {'last_activity': datetime.now()}}
             )
     
-    def add_questions(self, questions_list, uploaded_by):
+    def add_questions(self, questions_list, uploaded_by, topic_name=None):
         added_count = 0
         for question in questions_list:
             question['uploaded_by'] = uploaded_by
             question['uploaded_at'] = datetime.now()
             question['times_used'] = 0
             question['times_answered_correctly'] = 0
+            if topic_name:
+                question['topic'] = topic_name
             self.questions.insert_one(question)
             added_count += 1
         return added_count
     
-    def get_random_questions(self, count=10, subject=None):
-        query = {}
-        if subject and subject != "All":
-            query['subject'] = subject
+    def get_random_questions(self, count=5, chapter=None, topic=None, difficulty=None):
+        query = {'subject': 'Biology'}
+        
+        if chapter and chapter != "Mixed":
+            query['chapter'] = chapter
+        if topic and topic != "Mixed":
+            query['topic'] = topic
+        if difficulty and difficulty != "Mixed":
+            query['difficulty'] = difficulty
         
         pipeline = [
             {'$match': query},
@@ -68,14 +79,34 @@ class Database:
         questions = list(self.questions.aggregate(pipeline))
         return questions
     
-    def save_quiz_result(self, user_id, quiz_data):
+    def get_chapters(self):
+        pipeline = [
+            {'$match': {'subject': 'Biology'}},
+            {'$group': {'_id': '$chapter', 'count': {'$sum': 1}}}
+        ]
+        results = list(self.questions.aggregate(pipeline))
+        return {r['_id']: r['count'] for r in results if r['_id']}
+    
+    def get_topics(self):
+        pipeline = [
+            {'$match': {'subject': 'Biology', 'topic': {'$exists': True}}},
+            {'$group': {'_id': '$topic', 'count': {'$sum': 1}}}
+        ]
+        results = list(self.questions.aggregate(pipeline))
+        return {r['_id']: r['count'] for r in results if r['_id']}
+    
+    def save_quiz_result(self, user_id, quiz_data, chat_type='private', group_id=None):
         result = {
             'user_id': user_id,
+            'chat_type': chat_type,
+            'group_id': group_id,
             'timestamp': datetime.now(),
             'score': quiz_data['score'],
             'total_questions': quiz_data['total_questions'],
             'percentage': quiz_data['percentage'],
-            'subject': quiz_data.get('subject', 'Mixed'),
+            'chapter': quiz_data.get('chapter', 'Mixed'),
+            'topic': quiz_data.get('topic', 'Mixed'),
+            'difficulty': quiz_data.get('difficulty', 'Mixed'),
             'answers': quiz_data['answers']
         }
         self.quiz_results.insert_one(result)
@@ -95,12 +126,37 @@ class Database:
                 'last_activity': datetime.now()
             }
             
+            # Update difficulty progress
             for answer in quiz_data['answers']:
-                subject = answer.get('subject', 'Unknown')
-                if subject in user['subject_stats']:
-                    update_data[f'subject_stats.{subject}.attempted'] = user['subject_stats'][subject]['attempted'] + 1
+                difficulty = answer.get('difficulty', 'Easy')
+                if difficulty in user['difficulty_progress']:
+                    update_data[f'difficulty_progress.{difficulty}.attempted'] = user['difficulty_progress'][difficulty]['attempted'] + 1
                     if answer['correct']:
-                        update_data[f'subject_stats.{subject}.correct'] = user['subject_stats'][subject]['correct'] + 1
+                        update_data[f'difficulty_progress.{difficulty}.correct'] = user['difficulty_progress'][difficulty]['correct'] + 1
+                
+                # Update chapter stats
+                chapter = answer.get('chapter', 'Unknown')
+                if chapter not in user['chapter_stats']:
+                    user['chapter_stats'][chapter] = {'attempted': 0, 'correct': 0}
+                update_data[f'chapter_stats.{chapter}.attempted'] = user['chapter_stats'][chapter]['attempted'] + 1
+                if answer['correct']:
+                    update_data[f'chapter_stats.{chapter}.correct'] = user['chapter_stats'][chapter]['correct'] + 1
+                
+                # Update topic stats
+                topic = answer.get('topic', 'General')
+                if topic not in user['topic_stats']:
+                    user['topic_stats'][topic] = {'attempted': 0, 'correct': 0}
+                update_data[f'topic_stats.{topic}.attempted'] = user['topic_stats'][topic]['attempted'] + 1
+                if answer['correct']:
+                    update_data[f'topic_stats.{topic}.correct'] = user['topic_stats'][topic]['correct'] + 1
+            
+            # Update difficulty level based on performance
+            if quiz_data['percentage'] >= 80:
+                update_data['current_difficulty'] = 'Hard'
+            elif quiz_data['percentage'] >= 60:
+                update_data['current_difficulty'] = 'Medium'
+            else:
+                update_data['current_difficulty'] = 'Easy'
             
             self.users.update_one({'user_id': user_id}, {'$set': update_data})
     
@@ -112,10 +168,3 @@ class Database:
     
     def get_all_results(self, user_id, limit=50):
         return list(self.quiz_results.find({'user_id': user_id}).sort('timestamp', -1).limit(limit))
-    
-    def count_questions_by_subject(self):
-        pipeline = [
-            {'$group': {'_id': '$subject', 'count': {'$sum': 1}}}
-        ]
-        results = list(self.questions.aggregate(pipeline))
-        return {r['_id']: r['count'] for r in results}
